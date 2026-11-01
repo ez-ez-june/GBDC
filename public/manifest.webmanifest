@@ -1,0 +1,17 @@
+{
+  "name": "굿바이대치",
+  "short_name": "일정",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#efeae1",
+  "theme_color": "#145c4a",
+  "lang": "ko",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
