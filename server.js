@@ -6,12 +6,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mergeDocs } from "./merge.js";
 import { seed } from "./seed.js";
+import { files, openStore, publish } from "./store.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
-const dataDir = path.join(root, "data");
-const dataFile = path.join(dataDir, "itinerary.json");
-const authFile = path.join(dataDir, "auth.json");
+const { dataFile, authFile } = files(root);
 const port = Number(process.env.PORT) || 8787;
 const sessions = new Map();
 const clients = new Set();
@@ -57,9 +56,15 @@ function loadDoc() {
   return readJson(dataFile);
 }
 
-function saveDoc(doc) {
+async function saveDoc(doc) {
   writeJson(dataFile, doc);
+  await publish(root);
   return doc;
+}
+
+async function saveAuth(record) {
+  writeJson(authFile, record);
+  await publish(root);
 }
 
 function authRecord() {
@@ -139,8 +144,14 @@ function send(res, status, body, headers = {}) {
   res.end(payload);
 }
 
-function setSession(res, sid) {
-  res.setHeader("Set-Cookie", `sid=${encodeURIComponent(sid)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`);
+function cookieFlags(req) {
+  const proto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const secure = proto === "https" ? "; Secure" : "";
+  return `HttpOnly; SameSite=Lax; Path=/${secure}`;
+}
+
+function setSession(res, req, sid) {
+  res.setHeader("Set-Cookie", `sid=${encodeURIComponent(sid)}; ${cookieFlags(req)}; Max-Age=2592000`);
 }
 
 function broadcast() {
@@ -148,10 +159,10 @@ function broadcast() {
   for (const client of clients) client.write(message);
 }
 
-function createSession(res) {
+function createSession(res, req) {
   const sid = crypto.randomBytes(24).toString("hex");
   sessions.set(sid, Date.now());
-  setSession(res, sid);
+  setSession(res, req, sid);
 }
 
 function requireUser(req, res) {
@@ -202,8 +213,8 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const salt = crypto.randomBytes(16).toString("hex");
-      writeJson(authFile, { salt, hash: hashPassword(password, salt) });
-      createSession(res);
+      await saveAuth({ salt, hash: hashPassword(password, salt) });
+      createSession(res, req);
       send(res, 200, { ok: true });
       return;
     }
@@ -229,7 +240,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       attempts.delete(ip);
-      createSession(res);
+      createSession(res, req);
       send(res, 200, { ok: true });
       return;
     }
@@ -237,7 +248,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/api/logout" && req.method === "POST") {
       const sid = sessionUser(req);
       if (sid) sessions.delete(sid);
-      res.setHeader("Set-Cookie", "sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+      res.setHeader("Set-Cookie", `sid=; ${cookieFlags(req)}; Max-Age=0`);
       send(res, 200, { ok: true });
       return;
     }
@@ -259,14 +270,14 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const salt = crypto.randomBytes(16).toString("hex");
-      writeJson(authFile, { salt, hash: hashPassword(next, salt) });
+      await saveAuth({ salt, hash: hashPassword(next, salt) });
       send(res, 200, { ok: true });
       return;
     }
 
     if (pathname === "/api/meta" && req.method === "GET") {
       if (!requireUser(req, res)) return;
-      send(res, 200, { lanUrls: lanUrls(), port });
+      send(res, 200, { lanUrls: lanUrls(), port, publicUrl: process.env.PUBLIC_URL || "" });
       return;
     }
 
@@ -287,7 +298,7 @@ const server = http.createServer(async (req, res) => {
       const next = body.mode === "replace"
         ? { ...incoming, updatedAt: new Date().toISOString() }
         : mergeDocs(loadDoc(), incoming);
-      saveDoc(next);
+      await saveDoc(next);
       broadcast();
       send(res, 200, next);
       return;
@@ -319,6 +330,9 @@ const server = http.createServer(async (req, res) => {
     send(res, error.status || 500, { error: "요청을 처리하지 못했습니다." });
   }
 });
+
+await openStore(root);
+if (!fs.existsSync(dataFile)) writeJson(dataFile, seed);
 
 server.listen(port, "0.0.0.0", () => {
   console.log(`일정 앱 http://localhost:${port}`);

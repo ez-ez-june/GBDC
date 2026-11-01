@@ -66,6 +66,21 @@ async function request(url, options = {}) {
   return body;
 }
 
+async function waitForServer() {
+  gate.hidden = false;
+  gateHelp.textContent = "서버에 연결하는 중입니다. 잠시 꺼져 있었다면 깨우는 데 1분 정도 걸립니다.";
+  gateSubmit.disabled = true;
+  const started = Date.now();
+  while (Date.now() - started < 90000) {
+    try {
+      return await request("/api/status");
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+  return null;
+}
+
 function readLocal() {
   try {
     return JSON.parse(localStorage.getItem(LOCAL_KEY) || "null");
@@ -361,10 +376,13 @@ async function loadLan(node) {
     const meta = await request("/api/meta");
     node.replaceChildren();
     const lead = document.createElement("p");
-    lead.textContent = meta.lanUrls.length
-      ? "같은 와이파이의 휴대폰 브라우저에서 이 주소를 엽니다."
-      : "이 컴퓨터의 브라우저에서 http://localhost:" + meta.port + " 로 엽니다.";
+    lead.textContent = meta.publicUrl
+      ? "집 밖에서는 이 주소로 엽니다. 같은 와이파이에서는 아래 주소도 됩니다."
+      : meta.lanUrls.length
+        ? "같은 와이파이의 휴대폰 브라우저에서 이 주소를 엽니다."
+        : "이 컴퓨터의 브라우저에서 http://localhost:" + meta.port + " 로 엽니다.";
     node.append(lead);
+    if (meta.publicUrl) node.append(detail(meta.publicUrl));
     for (const url of meta.lanUrls) node.append(detail(url));
     node.append(detail("여행 중 이 서버에 연결되면 PC와 휴대폰 수정이 바로 맞습니다. 연결이 없으면 그 기기에 남고, 다시 연결될 때 합쳐집니다. 홈 화면에 추가하면 앱처럼 열립니다."));
   } catch {
@@ -727,6 +745,7 @@ window.addEventListener("offline", () => {
   setSync("off", "이 기기에 저장");
 });
 
-const status = await request("/api/status").catch(() => ({ setup: false, authenticated: false }));
-if (status.authenticated) await enterApp();
-else showGate(!status.setup);
+const status = await waitForServer();
+gateSubmit.disabled = false;
+if (status?.authenticated) await enterApp();
+else showGate(!status?.setup);
